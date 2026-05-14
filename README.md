@@ -109,6 +109,24 @@ $ duplicates --json dirA dirB
 `--json` is mutually exclusive with `--dups-only` and `--summary`.
 Combine with `--unique` to also include the unique files in the output.
 
+### Progress on long scans
+
+`--verbose` surfaces phase markers and per-file logs to stderr — useful
+when running over a slow filesystem (SMB, large library) where the tool
+might otherwise look stuck:
+
+```
+INFO: Scanning 1 path(s)...
+INFO: Scanned 1284 file(s) so far...
+INFO: Discovered 4012 file(s) in 3987 size group(s)
+INFO: Partial-hashing 12 file(s)...
+INFO: Partial-hashing /films/movie.mp4 (5.2 GiB)
+INFO: Full-hashing 4 file(s)...
+INFO: Full-hashing /films/movie.mp4 (5.2 GiB)
+```
+
+`--debug` adds per-directory and per-ignored-entry messages on top.
+
 ## Python API
 
 ```python

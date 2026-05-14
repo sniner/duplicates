@@ -1,6 +1,7 @@
 import hashlib
 import logging
 import stat
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,6 +16,34 @@ _BLOCK_SIZE = 1 << 20
 # I/O on collections of large near-duplicates (videos, archives).
 _PARTIAL_WINDOW = 4096
 _PARTIAL_THRESHOLD = 65536
+
+
+def _human_size(n: int) -> str:
+    x = float(n)
+    for unit in ("B", "KiB", "MiB", "GiB", "TiB"):
+        if abs(x) < 1024:
+            return f"{x:.1f} {unit}"
+        x /= 1024
+    return f"{x:.1f} PiB"
+
+
+class _Progress:
+    """Emits a throttled INFO log message at most once per `interval` seconds.
+
+    Used to surface long-running work (directory walks, hash passes) without
+    flooding the log. `warmup` keeps the first message from firing
+    immediately, so fast scans don't print anything at all.
+    """
+
+    def __init__(self, interval: float = 2.0, warmup: float = 1.0) -> None:
+        self.interval = interval
+        self.next_emit = time.monotonic() + warmup
+
+    def tick(self, msg: str, *args: object) -> None:
+        now = time.monotonic()
+        if now >= self.next_emit:
+            log.info(msg, *args)
+            self.next_emit = now + self.interval
 
 
 @dataclass
@@ -84,9 +113,94 @@ class DupFinder:
             m.update(f.read(_PARTIAL_WINDOW))
         return m.hexdigest()
 
-    def _hash_and_persist(self, f: FileEntry) -> str:
+    def _partial_hash_log(self, f: FileEntry) -> str:
+        log.info("Partial-hashing %s (%s)", f.path, _human_size(f.size))
+        return self._partial_fingerprint(f.path, f.size)
+
+    def _full_hash_log(self, f: FileEntry) -> str:
+        log.info("Full-hashing %s (%s)", f.path, _human_size(f.size))
         f.hash = self._fingerprint(f.path)
         return f.hash
+
+    @staticmethod
+    def _stat_file(path: Path) -> FileEntry:
+        log.debug("FILE: %s", path)
+        st = path.stat()
+        return FileEntry(
+            path=path,
+            size=st.st_size,
+            age=max(st.st_mtime, st.st_ctime),
+        )
+
+    def _scan_dir(
+        self,
+        root: Path,
+        files: list[FileEntry],
+        progress: _Progress,
+    ) -> None:
+        # Iterative walk with explicit stack so deep trees don't hit the
+        # Python recursion limit. When following symlinks we remember
+        # already-visited (resolved) directories to defuse symlink cycles.
+        visited: set[Path] = set()
+        stack: list[Path] = [root]
+        while stack:
+            path = stack.pop()
+            log.debug("DIR: %s", path)
+            if not self.ignore_symlinks:
+                try:
+                    resolved = path.resolve(strict=True)
+                except OSError as exc:
+                    log.debug("Cannot resolve '%s': %s", path, exc)
+                    continue
+                if resolved in visited:
+                    log.debug("Skipping already-visited directory '%s'", path)
+                    continue
+                visited.add(resolved)
+            try:
+                entries = list(path.iterdir())
+            except OSError as exc:
+                log.debug("Cannot enter '%s': %s", path, exc)
+                continue
+            for entry in entries:
+                try:
+                    if self.ignore_symlinks and entry.is_symlink():
+                        log.debug("Ignoring symlink '%s'", entry)
+                    elif self.ignore_hidden and entry.name.startswith("."):
+                        log.debug("Ignoring hidden %s", _describe(entry))
+                    elif entry.is_dir():
+                        if self.ignore_mounts and entry.is_mount():
+                            log.debug("Ignoring mountpoint '%s'", entry)
+                        else:
+                            stack.append(entry)
+                    elif entry.is_file():
+                        files.append(self._stat_file(entry))
+                        progress.tick("Scanned %d file(s) so far...", len(files))
+                    else:
+                        log.debug("Ignoring %s", _describe(entry))
+                except OSError as exc:
+                    log.error("Cannot access '%s': %s", entry, exc)
+
+    def _collect(
+        self,
+        paths: tuple[Path | str, ...],
+        progress: _Progress,
+    ) -> list[FileEntry]:
+        files: list[FileEntry] = []
+        for raw in paths:
+            path = raw if isinstance(raw, Path) else Path(str(raw))
+            try:
+                if not path.exists():
+                    log.info("'%s' not found", path)
+                    continue
+                if path.is_dir():
+                    self._scan_dir(path, files, progress)
+                elif path.is_file():
+                    files.append(self._stat_file(path))
+                else:
+                    log.debug("Ignoring %s", _describe(path))
+            except OSError as exc:
+                log.error("Cannot access '%s': %s", path, exc)
+        return files
 
     @staticmethod
     def _bucket_groups(
@@ -129,76 +243,6 @@ class DupFinder:
                     multi.append(items)
         return multi, singletons, unreadable
 
-    @staticmethod
-    def _stat_file(path: Path) -> FileEntry:
-        log.debug("FILE: %s", path)
-        st = path.stat()
-        return FileEntry(
-            path=path,
-            size=st.st_size,
-            age=max(st.st_mtime, st.st_ctime),
-        )
-
-    def _scan_dir(self, root: Path, files: list[FileEntry]) -> None:
-        # Iterative walk with explicit stack so deep trees don't hit the
-        # Python recursion limit. When following symlinks we remember
-        # already-visited (resolved) directories to defuse symlink cycles.
-        visited: set[Path] = set()
-        stack: list[Path] = [root]
-        while stack:
-            path = stack.pop()
-            log.debug("DIR: %s", path)
-            if not self.ignore_symlinks:
-                try:
-                    resolved = path.resolve(strict=True)
-                except OSError as exc:
-                    log.info("Cannot resolve '%s': %s", path, exc)
-                    continue
-                if resolved in visited:
-                    log.info("Skipping already-visited directory '%s'", path)
-                    continue
-                visited.add(resolved)
-            try:
-                entries = list(path.iterdir())
-            except OSError as exc:
-                log.info("Cannot enter '%s': %s", path, exc)
-                continue
-            for entry in entries:
-                try:
-                    if self.ignore_symlinks and entry.is_symlink():
-                        log.info("Ignoring symlink '%s'", entry)
-                    elif self.ignore_hidden and entry.name.startswith("."):
-                        log.info("Ignoring hidden %s", _describe(entry))
-                    elif entry.is_dir():
-                        if self.ignore_mounts and entry.is_mount():
-                            log.info("Ignoring mountpoint '%s'", entry)
-                        else:
-                            stack.append(entry)
-                    elif entry.is_file():
-                        files.append(self._stat_file(entry))
-                    else:
-                        log.info("Ignoring %s", _describe(entry))
-                except OSError as exc:
-                    log.error("Cannot access '%s': %s", entry, exc)
-
-    def _collect(self, paths: tuple[Path | str, ...]) -> list[FileEntry]:
-        files: list[FileEntry] = []
-        for raw in paths:
-            path = raw if isinstance(raw, Path) else Path(str(raw))
-            try:
-                if not path.exists():
-                    log.info("'%s' not found", path)
-                    continue
-                if path.is_dir():
-                    self._scan_dir(path, files)
-                elif path.is_file():
-                    files.append(self._stat_file(path))
-                else:
-                    log.info("Ignoring %s", _describe(path))
-            except OSError as exc:
-                log.error("Cannot access '%s': %s", path, exc)
-        return files
-
     def scan(
         self,
         *paths: Path | str,
@@ -218,14 +262,17 @@ class DupFinder:
         Empty files are always treated as unique. Order within each list
         reflects filesystem traversal and is not guaranteed to be stable.
         """
-        files = self._collect(paths)
+        progress = _Progress()
+
+        log.info("Scanning %d path(s)...", len(paths))
+        files = self._collect(paths, progress)
 
         # Phase 1: bucket by size. Files alone in their size bucket can't be
         # duplicates of anything; empty files are always treated as unique.
         by_size: dict[int, list[FileEntry]] = {}
         for f in files:
             by_size.setdefault(f.size, []).append(f)
-        log.debug("%d files of %d different sizes", len(files), len(by_size))
+        log.info("Discovered %d file(s) in %d size group(s)", len(files), len(by_size))
 
         uniq: list[FileEntry] = []
         candidates: list[list[FileEntry]] = []
@@ -243,17 +290,25 @@ class DupFinder:
         # whose files are smaller than _PARTIAL_THRESHOLD pass through to the
         # full-hash phase unchanged — the seek to the tail wouldn't save
         # enough I/O to be worth it.
+        partial_count = sum(
+            len(g) for g in candidates if g and g[0].size >= _PARTIAL_THRESHOLD
+        )
+        if partial_count:
+            log.info("Partial-hashing %d file(s)...", partial_count)
         survivors, partial_uniq, partial_unreadable = self._bucket_groups(
             candidates,
-            lambda f: self._partial_fingerprint(f.path, f.size),
+            self._partial_hash_log,
             min_size=_PARTIAL_THRESHOLD,
         )
         uniq.extend(partial_uniq)
 
         # Phase 3: full SHA-256 on whatever the partial pass couldn't separate.
+        full_count = sum(len(g) for g in survivors)
+        if full_count:
+            log.info("Full-hashing %d file(s)...", full_count)
         dups, full_uniq, full_unreadable = self._bucket_groups(
             survivors,
-            self._hash_and_persist,
+            self._full_hash_log,
         )
         uniq.extend(full_uniq)
 
