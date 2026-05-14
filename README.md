@@ -28,6 +28,11 @@ is a tiny chance for two files with the same fingerprint to have different
 content, but that chance is [very
 remote](https://stackoverflow.com/questions/4014090).
 
+Large files (≥ 64 KiB) are first compared by a cheap "partial" SHA-256 over
+their first and last 4 KiB; only files that survive that prefilter are read
+in full. For collections of large near-duplicates (videos, archives) this
+avoids reading most of the data.
+
 Symbolic links and hidden entries are ignored by default. This behavior can
 be changed with the CLI options `--follow` / `--hidden` or the constructor
 options `ignore_symlinks` / `ignore_hidden`.

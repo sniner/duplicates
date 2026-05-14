@@ -1,12 +1,20 @@
 import hashlib
 import logging
 import stat
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
 log = logging.getLogger(__name__)
 
 _BLOCK_SIZE = 1 << 20
+
+# Two-stage fingerprinting: for files at least _PARTIAL_THRESHOLD bytes we
+# hash a head and tail window first, and only fall back to the full SHA-256
+# when several files share the same partial hash. Saves dramatic amounts of
+# I/O on collections of large near-duplicates (videos, archives).
+_PARTIAL_WINDOW = 4096
+_PARTIAL_THRESHOLD = 65536
 
 
 @dataclass
@@ -64,6 +72,62 @@ class DupFinder:
             while block := f.read(blocksize):
                 m.update(block)
         return m.hexdigest()
+
+    @staticmethod
+    def _partial_fingerprint(path: Path, size: int) -> str:
+        # Precondition: only called for size >= _PARTIAL_THRESHOLD, which is
+        # always > 2 * _PARTIAL_WINDOW, so head and tail don't overlap.
+        m = hashlib.sha256()
+        with open(path, "rb") as f:
+            m.update(f.read(_PARTIAL_WINDOW))
+            f.seek(size - _PARTIAL_WINDOW)
+            m.update(f.read(_PARTIAL_WINDOW))
+        return m.hexdigest()
+
+    def _hash_and_persist(self, f: FileEntry) -> str:
+        f.hash = self._fingerprint(f.path)
+        return f.hash
+
+    @staticmethod
+    def _bucket_groups(
+        groups: list[list[FileEntry]],
+        hasher: Callable[[FileEntry], str],
+        min_size: int = 0,
+    ) -> tuple[list[list[FileEntry]], list[FileEntry], list[FileEntry]]:
+        """Sub-bucket each group via `hasher`.
+
+        Returns `(multi, singletons, unreadable)`:
+
+        - `multi`: sub-buckets with at least two entries (still candidates).
+        - `singletons`: sub-buckets reduced to exactly one entry (proven unique).
+        - `unreadable`: entries whose hash could not be computed.
+
+        Groups whose member size is below `min_size` are passed through to
+        `multi` unchanged — useful for the partial-hash pass, where small
+        files don't benefit from the seek-to-tail step.
+        """
+        multi: list[list[FileEntry]] = []
+        singletons: list[FileEntry] = []
+        unreadable: list[FileEntry] = []
+        for group in groups:
+            if group and group[0].size < min_size:
+                multi.append(group)
+                continue
+            buckets: dict[str, list[FileEntry]] = {}
+            for f in group:
+                try:
+                    key = hasher(f)
+                except OSError as exc:
+                    log.error("Unable to read '%s': %s", f.path, exc)
+                    unreadable.append(f)
+                    continue
+                buckets.setdefault(key, []).append(f)
+            for items in buckets.values():
+                if len(items) == 1:
+                    singletons.append(items[0])
+                else:
+                    multi.append(items)
+        return multi, singletons, unreadable
 
     @staticmethod
     def _stat_file(path: Path) -> FileEntry:
@@ -156,6 +220,8 @@ class DupFinder:
         """
         files = self._collect(paths)
 
+        # Phase 1: bucket by size. Files alone in their size bucket can't be
+        # duplicates of anything; empty files are always treated as unique.
         by_size: dict[int, list[FileEntry]] = {}
         for f in files:
             by_size.setdefault(f.size, []).append(f)
@@ -173,26 +239,25 @@ class DupFinder:
             else:
                 candidates.append(group)
 
-        by_hash: dict[str, list[FileEntry]] = {}
-        unreadable: list[FileEntry] = []
-        for group in candidates:
-            for f in group:
-                try:
-                    f.hash = self._fingerprint(f.path)
-                except OSError as exc:
-                    log.error("Unable to read '%s': %s", f.path, exc)
-                    unreadable.append(f)
-                    continue
-                by_hash.setdefault(f.hash, []).append(f)
+        # Phase 2: cheap partial hash (head + tail) on large files. Groups
+        # whose files are smaller than _PARTIAL_THRESHOLD pass through to the
+        # full-hash phase unchanged — the seek to the tail wouldn't save
+        # enough I/O to be worth it.
+        survivors, partial_uniq, partial_unreadable = self._bucket_groups(
+            candidates,
+            lambda f: self._partial_fingerprint(f.path, f.size),
+            min_size=_PARTIAL_THRESHOLD,
+        )
+        uniq.extend(partial_uniq)
 
-        dups: list[list[FileEntry]] = []
-        for items in by_hash.values():
-            if len(items) == 1:
-                uniq.append(items[0])
-            else:
-                dups.append(items)
+        # Phase 3: full SHA-256 on whatever the partial pass couldn't separate.
+        dups, full_uniq, full_unreadable = self._bucket_groups(
+            survivors,
+            self._hash_and_persist,
+        )
+        uniq.extend(full_uniq)
 
-        return uniq, dups, unreadable
+        return uniq, dups, partial_unreadable + full_unreadable
 
 
 # vim: set et sw=4 ts=4:
