@@ -1,7 +1,9 @@
 import argparse
+import json
 import logging
 import re
 import sys
+import time
 from pathlib import Path
 
 from duplicates.dupfinder import DupFinder, FileEntry
@@ -45,12 +47,7 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--unique",
         action="store_true",
-        help="Print also unique files.",
-    )
-    parser.add_argument(
-        "--dups-only",
-        action="store_true",
-        help="Print only duplicates, no uniques and no originals, zero-delimited.",
+        help="Also include unique files in the output.",
     )
     parser.add_argument(
         "--verbose",
@@ -58,14 +55,25 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Print more information.",
     )
     parser.add_argument(
-        "--summary",
-        action="store_true",
-        help="Print the final summary.",
-    )
-    parser.add_argument(
         "--debug",
         action="store_true",
         help="Print debug output.",
+    )
+    output = parser.add_mutually_exclusive_group()
+    output.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit results as JSON on stdout, including a statistics block.",
+    )
+    output.add_argument(
+        "--dups-only",
+        action="store_true",
+        help="Print only duplicates, no uniques and no originals, zero-delimited.",
+    )
+    output.add_argument(
+        "--summary",
+        action="store_true",
+        help="Print the final summary line.",
     )
     return parser
 
@@ -84,6 +92,56 @@ def _configure_logging(verbose: bool, debug: bool) -> None:
     )
 
 
+def _entry_dict(f: FileEntry) -> dict[str, object]:
+    return {"path": str(f.path), "size": f.size, "age": f.age}
+
+
+def _build_json_result(
+    *,
+    scanned_paths: list[Path],
+    uniq: list[FileEntry],
+    dups: list[list[FileEntry]],
+    unreadable: list[FileEntry],
+    include_unique: bool,
+    elapsed: float,
+) -> dict[str, object]:
+    dup_blocks: list[dict[str, object]] = []
+    dup_copies = 0
+    for group in dups:
+        sorted_group = _dup_sort(group)
+        first = sorted_group[0]
+        # All files in a duplicate group share the same content, hence the
+        # same hash and size — record them once at the group level.
+        dup_blocks.append(
+            {
+                "hash": f"sha256:{first.hash}" if first.hash else None,
+                "size": first.size,
+                "files": [{"path": str(f.path), "age": f.age} for f in sorted_group],
+            }
+        )
+        dup_copies += len(group) - 1
+
+    total = len(uniq) + sum(len(g) for g in dups) + len(unreadable)
+
+    result: dict[str, object] = {
+        "scanned_paths": [str(p) for p in scanned_paths],
+        "duplicates": dup_blocks,
+    }
+    if include_unique:
+        result["unique"] = [_entry_dict(f) for f in _path_sort(uniq)]
+    if unreadable:
+        result["unreadable"] = [_entry_dict(f) for f in unreadable]
+    result["statistics"] = {
+        "total_files": total,
+        "unique_files": len(uniq),
+        "duplicate_groups": len(dups),
+        "duplicate_copies": dup_copies,
+        "unreadable_files": len(unreadable),
+        "elapsed_seconds": round(elapsed, 4),
+    }
+    return result
+
+
 def main() -> None:
     args = _build_parser().parse_args()
     _configure_logging(args.verbose, args.debug)
@@ -94,10 +152,24 @@ def main() -> None:
         ignore_mounts=args.one_file_system,
     )
 
+    t0 = time.perf_counter()
     try:
         uniq, dups, unreadable = df.scan(*args.path)
     except KeyboardInterrupt:
         print("Stopped.", file=sys.stderr)
+        return
+    elapsed = time.perf_counter() - t0
+
+    if args.json:
+        result = _build_json_result(
+            scanned_paths=args.path,
+            uniq=uniq,
+            dups=dups,
+            unreadable=unreadable,
+            include_unique=args.unique,
+            elapsed=elapsed,
+        )
+        print(json.dumps(result, indent=2))
         return
 
     if args.unique and not args.dups_only:
@@ -126,6 +198,7 @@ def main() -> None:
         ]
         if unreadable:
             parts.append(f"({_count(len(unreadable), 'unreadable', 'unreadable')})")
+        parts.append(f"in {elapsed:.4f}s")
         print("SUMMARY:", *parts, file=sys.stderr)
 
 

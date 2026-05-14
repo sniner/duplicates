@@ -76,6 +76,39 @@ For the [fish shell](https://fishshell.com/) the syntax is almost identical:
 $ duplicates --dups-only dirA dirB | while read -la dups ; xargs -0 rm $dups ; end
 ```
 
+### JSON output
+
+For scripted consumption, `--json` emits the full result on stdout
+including a `statistics` block with counts and the scan's elapsed time:
+
+```console
+$ duplicates --json dirA dirB
+{
+  "scanned_paths": ["dirA", "dirB"],
+  "duplicates": [
+    {
+      "hash": "sha256:e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "size": 1234,
+      "files": [
+        {"path": "dirA/file01", "age": 1700000000.0},
+        {"path": "dirA/file01.bak", "age": 1710000000.0}
+      ]
+    }
+  ],
+  "statistics": {
+    "total_files": 12,
+    "unique_files": 10,
+    "duplicate_groups": 1,
+    "duplicate_copies": 1,
+    "unreadable_files": 0,
+    "elapsed_seconds": 0.0123
+  }
+}
+```
+
+`--json` is mutually exclusive with `--dups-only` and `--summary`.
+Combine with `--unique` to also include the unique files in the output.
+
 ## Python API
 
 ```python

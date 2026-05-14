@@ -1,3 +1,5 @@
+import json
+import re
 from pathlib import Path
 
 import pytest
@@ -138,3 +140,128 @@ class TestMain:
         assert "SUMMARY:" in captured.err
         assert "3 files total" in captured.err
         assert "1 duplicate" in captured.err
+        # Elapsed time is part of the summary now.
+        assert re.search(r"in \d+\.\d{4}s", captured.err)
+
+
+class TestJsonOutput:
+    def _run_json(
+        self,
+        argv: list[str],
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> dict:
+        monkeypatch.setattr("sys.argv", argv)
+        main()
+        out = capsys.readouterr().out
+        return json.loads(out)
+
+    def test_basic_shape(
+        self,
+        dup_tree: Path,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        data = self._run_json(
+            ["duplicates", "--json", str(dup_tree)], capsys, monkeypatch
+        )
+
+        assert data["scanned_paths"] == [str(dup_tree)]
+        assert len(data["duplicates"]) == 1
+        group = data["duplicates"][0]
+        assert group["size"] == len(b"same")
+        assert group["hash"].startswith("sha256:")
+        assert len(group["hash"]) == len("sha256:") + 64
+        paths = [f["path"] for f in group["files"]]
+        assert set(paths) == {str(dup_tree / "a.txt"), str(dup_tree / "b.txt")}
+        # Oldest first.
+        assert paths[0] == str(dup_tree / "a.txt")
+
+    def test_statistics_counts_match(
+        self,
+        dup_tree: Path,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        data = self._run_json(
+            ["duplicates", "--json", str(dup_tree)], capsys, monkeypatch
+        )
+        stats = data["statistics"]
+
+        assert stats["total_files"] == 3
+        assert stats["unique_files"] == 1
+        assert stats["duplicate_groups"] == 1
+        assert stats["duplicate_copies"] == 1
+        assert stats["unreadable_files"] == 0
+        assert isinstance(stats["elapsed_seconds"], (int, float))
+        assert stats["elapsed_seconds"] >= 0
+
+    def test_unique_block_omitted_by_default(
+        self,
+        dup_tree: Path,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        data = self._run_json(
+            ["duplicates", "--json", str(dup_tree)], capsys, monkeypatch
+        )
+        assert "unique" not in data
+
+    def test_unique_block_present_with_flag(
+        self,
+        dup_tree: Path,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        data = self._run_json(
+            ["duplicates", "--json", "--unique", str(dup_tree)],
+            capsys,
+            monkeypatch,
+        )
+        assert len(data["unique"]) == 1
+        assert data["unique"][0]["path"] == str(dup_tree / "c.txt")
+
+    def test_unreadable_block_omitted_when_empty(
+        self,
+        dup_tree: Path,
+        capsys: pytest.CaptureFixture[str],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        data = self._run_json(
+            ["duplicates", "--json", str(dup_tree)], capsys, monkeypatch
+        )
+        assert "unreadable" not in data
+
+    @pytest.mark.parametrize(
+        "extra",
+        [
+            ["--dups-only"],
+            ["--summary"],
+        ],
+    )
+    def test_json_mutually_exclusive_with_other_output_modes(
+        self,
+        dup_tree: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+        extra: list[str],
+    ) -> None:
+        monkeypatch.setattr("sys.argv", ["duplicates", "--json", *extra, str(dup_tree)])
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert exc.value.code == 2
+        assert "not allowed with argument" in capsys.readouterr().err
+
+    def test_dups_only_and_summary_mutually_exclusive(
+        self,
+        dup_tree: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        monkeypatch.setattr(
+            "sys.argv",
+            ["duplicates", "--dups-only", "--summary", str(dup_tree)],
+        )
+        with pytest.raises(SystemExit) as exc:
+            main()
+        assert exc.value.code == 2
