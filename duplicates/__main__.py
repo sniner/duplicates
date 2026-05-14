@@ -7,7 +7,7 @@ from pathlib import Path
 from duplicates.dupfinder import DupFinder, FileEntry
 
 
-def _natural_key(text: object) -> list[int | str]:
+def _natural_key(text: str | Path) -> list[int | str]:
     parts = re.split("([0-9]+)", str(text))
     return [int(p) if p.isdigit() else p.lower() for p in parts]
 
@@ -95,7 +95,7 @@ def main() -> None:
     )
 
     try:
-        uniq, dups = df.scan(*args.path)
+        uniq, dups, unreadable = df.scan(*args.path)
     except KeyboardInterrupt:
         print("Stopped.", file=sys.stderr)
         return
@@ -117,15 +117,16 @@ def main() -> None:
                 print("\t", f.path, sep="")
 
     if args.verbose or args.summary:
-        total = len(uniq) + dup_files
+        total = len(uniq) + dup_files + len(unreadable)
         copies = dup_files - len(dups)
-        print(
-            "SUMMARY:",
+        parts = [
             f"{_count(total, 'file', 'files')} total,",
             f"{_count(copies, 'duplicate', 'duplicates')}",
             f"out of {_count(len(dups), 'file', 'files')}",
-            file=sys.stderr,
-        )
+        ]
+        if unreadable:
+            parts.append(f"({_count(len(unreadable), 'unreadable', 'unreadable')})")
+        print("SUMMARY:", *parts, file=sys.stderr)
 
 
 if __name__ == "__main__":

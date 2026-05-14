@@ -1,6 +1,6 @@
 [project]
 name = "duplicates"
-version = "0.2.0"
+version = "0.3.0"
 description = "Find identical files in subdirectories"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -38,5 +38,11 @@ module-root = ""
 [tool.ruff]
 line-length = 90
 
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "UP", "B"]
+
 [tool.basedpyright]
 typeCheckingMode = "standard"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

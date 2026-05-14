@@ -76,12 +76,15 @@ $ duplicates --dups-only dirA dirB | while read -la dups ; xargs -0 rm $dups ; e
 ```python
 from duplicates import DupFinder
 
-uniq, dups = DupFinder().scan(".")
+uniq, dups, unreadable = DupFinder().scan(".")
 ```
 
 `uniq` is a list of unique `FileEntry` objects. `dups` is a list of duplicate
 groups, where each group is a list of `FileEntry` objects with identical
-content. Use `entry.age` to identify the oldest file in a group.
+content. Use `entry.age` to identify the oldest file in a group. `unreadable`
+collects files that could not be fingerprinted (permission denied, I/O error);
+they cannot be classified and are returned separately instead of being
+silently dropped.
 
 A `FileEntry` is a dataclass with the following fields:
 
