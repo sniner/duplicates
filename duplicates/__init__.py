@@ -1,3 +1,2 @@
-__all__ = ["dupfinder"]
-
-from . dupfinder import DupFinder
+from duplicates.dupfinder import DupFinder as DupFinder
+from duplicates.dupfinder import FileEntry as FileEntry

@@ -1,37 +1,46 @@
 # duplicates
 
-[![Build Status](https://travis-ci.org/sniner/duplicates.svg?branch=master)](https://travis-ci.org/sniner/duplicates)
-
 Scan for identical files (duplicates) in subdirectories.
 
 ## Requirements
 
-* Python >= 3.6
-* MS Windows is not supported
+* Python >= 3.11
+* POSIX (Linux, macOS); MS Windows is not supported.
+
+## Installation
+
+```console
+$ uv tool install duplicates
+```
+
+Or, if you prefer pipx:
+
+```console
+$ pipx install duplicates
+```
 
 ## Description
 
-To find files with identical content the given directories will be scanned and
-for files of same size their SHA-256 fingerprints are calculated and compared.
-Two files with identical fingerprints are considered to have the same content.
-There is a tiny chance for two files with same fingerprint to have different
-content, but this chance is [very
+To find files with identical content, the given directories are scanned and
+files of the same size have their SHA-256 fingerprints compared. Two files
+with identical fingerprints are considered to have the same content. There
+is a tiny chance for two files with the same fingerprint to have different
+content, but that chance is [very
 remote](https://stackoverflow.com/questions/4014090).
 
-Symbolic links and hidden entries are ignored by default, this behaviour can
-be changed with CLI options `--follow`/`--hidden` and constructor options
-`ignore_hidden`/`ignore_symlinks`.
+Symbolic links and hidden entries are ignored by default. This behavior can
+be changed with the CLI options `--follow` / `--hidden` or the constructor
+options `ignore_symlinks` / `ignore_hidden`.
 
 ## CLI examples
 
-This one will give you a short command overview:
+Print a short command overview:
 
 ```console
 $ duplicates --help
 ```
 
-Scan directories `dirA`, `dirB` and `dirC` for duplicates and report all found
-identical files:
+Scan directories `dirA`, `dirB` and `dirC` and report identical files:
 
 ```console
 $ duplicates dirA dirB dirC
@@ -43,8 +52,8 @@ dirA/file02
         dirB/file02~
 ```
 
-The oldest file is printed without indent, all identical files are printed
-indented by a tab character. The oldest file is supposed to be the original.
+The oldest file is printed without indent; identical files are listed
+indented by a tab. The oldest file is treated as the original.
 
 If you are willing to take risks, you can delete all duplicates at once.
 I wouldn't dare, but you get the picture:
@@ -53,31 +62,42 @@ I wouldn't dare, but you get the picture:
 $ duplicates --dups-only dirA dirB | while read dups ; do xargs -0 rm $dups ; done
 ```
 
-With `--dups-only` all duplicates for one original are output on one line,
-separated by `\0` (ASCII code zero).
+With `--dups-only`, all duplicates for one original are printed on a single
+line separated by `\0` (ASCII NUL).
 
-For [fish shell](https://fishshell.com/) it looks almost identical:
+For the [fish shell](https://fishshell.com/) the syntax is almost identical:
 
 ```console
 $ duplicates --dups-only dirA dirB | while read -la dups ; xargs -0 rm $dups ; end
 ```
 
-## Python examples
+## Python API
 
 ```python
-import duplicates
+from duplicates import DupFinder
 
-df = duplicates.DupFinder(verbose=True)
-uniq, dups = df.scan(".")
+uniq, dups = DupFinder().scan(".")
 ```
 
-`uniq` is a list of unique file objects. `dups` is a list of identical files,
-which in turn are lists of file objects, the first being the oldest element
-and thus the supposed original.
+`uniq` is a list of unique `FileEntry` objects. `dups` is a list of duplicate
+groups, where each group is a list of `FileEntry` objects with identical
+content. Use `entry.age` to identify the oldest file in a group.
 
-A file object is a dict consisting of the following elements:
+A `FileEntry` is a dataclass with the following fields:
 
-* `path`: a pathlib.Path object
-* `age`: modification time in seconds ([Unix time](https://docs.python.org/3/library/os.html#os.stat_result))
+* `path`: a `pathlib.Path`
 * `size`: file size in bytes
-* `hash`: the SHA-256 fingerprint (not calculated for unique files)
+* `age`: modification time in seconds ([Unix time](https://docs.python.org/3/library/os.html#os.stat_result))
+* `hash`: the SHA-256 fingerprint (`None` for unique files where no hash was needed)
+
+Progress messages are emitted via the `logging` module on the `duplicates`
+logger; configure logging in your application to see them.
+
+## Development
+
+```console
+$ uv sync
+$ uv run pytest
+$ uv run ruff check .
+$ uv run basedpyright
+```

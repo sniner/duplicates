@@ -1,0 +1,42 @@
+[project]
+name = "duplicates"
+version = "0.2.0"
+description = "Find identical files in subdirectories"
+readme = "README.md"
+license = { file = "LICENSE" }
+authors = [
+    { name = "Stefan Schönberger", email = "stefan@sniner.dev" },
+]
+requires-python = ">=3.11"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Operating System :: POSIX",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/sniner/duplicates"
+
+[project.scripts]
+duplicates = "duplicates.__main__:main"
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "basedpyright>=1.20",
+    "ruff>=0.7",
+]
+
+[build-system]
+requires = ["uv_build>=0.11,<0.12"]
+build-backend = "uv_build"
+
+[tool.uv.build-backend]
+module-name = "duplicates"
+module-root = ""
+
+[tool.ruff]
+line-length = 90
+
+[tool.basedpyright]
+typeCheckingMode = "standard"
