@@ -122,6 +122,11 @@ def _build_json_result(
         dup_copies += len(group) - 1
 
     total = len(uniq) + sum(len(g) for g in dups) + len(unreadable)
+    total_bytes = (
+        sum(f.size for f in uniq)
+        + sum(f.size for g in dups for f in g)
+        + sum(f.size for f in unreadable)
+    )
 
     result: dict[str, object] = {
         "scanned_paths": [str(p) for p in scanned_paths],
@@ -133,6 +138,7 @@ def _build_json_result(
         result["unreadable"] = [_entry_dict(f) for f in unreadable]
     result["statistics"] = {
         "total_files": total,
+        "total_bytes": total_bytes,
         "unique_files": len(uniq),
         "duplicate_groups": len(dups),
         "duplicate_copies": dup_copies,

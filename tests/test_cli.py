@@ -189,6 +189,8 @@ class TestJsonOutput:
         stats = data["statistics"]
 
         assert stats["total_files"] == 3
+        # Two "same" (4 bytes each) plus one "unique" (6 bytes).
+        assert stats["total_bytes"] == 4 + 4 + 6
         assert stats["unique_files"] == 1
         assert stats["duplicate_groups"] == 1
         assert stats["duplicate_copies"] == 1
