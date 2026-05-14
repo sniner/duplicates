@@ -107,6 +107,7 @@ def _build_json_result(
 ) -> dict[str, object]:
     dup_blocks: list[dict[str, object]] = []
     dup_copies = 0
+    dup_bytes = 0
     for group in dups:
         sorted_group = _dup_sort(group)
         first = sorted_group[0]
@@ -120,6 +121,7 @@ def _build_json_result(
             }
         )
         dup_copies += len(group) - 1
+        dup_bytes += (len(group) - 1) * first.size
 
     total = len(uniq) + sum(len(g) for g in dups) + len(unreadable)
     total_bytes = (
@@ -142,6 +144,7 @@ def _build_json_result(
         "unique_files": len(uniq),
         "duplicate_groups": len(dups),
         "duplicate_copies": dup_copies,
+        "duplicate_bytes": dup_bytes,
         "unreadable_files": len(unreadable),
         "elapsed_seconds": round(elapsed, 4),
     }

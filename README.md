@@ -100,6 +100,7 @@ $ duplicates --json dirA dirB
     "unique_files": 10,
     "duplicate_groups": 1,
     "duplicate_copies": 1,
+    "duplicate_bytes": 1234,
     "unreadable_files": 0,
     "elapsed_seconds": 0.0123
   }

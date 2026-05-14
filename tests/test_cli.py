@@ -194,6 +194,8 @@ class TestJsonOutput:
         assert stats["unique_files"] == 1
         assert stats["duplicate_groups"] == 1
         assert stats["duplicate_copies"] == 1
+        # One redundant copy of "same" (4 bytes) is the reclaimable space.
+        assert stats["duplicate_bytes"] == 4
         assert stats["unreadable_files"] == 0
         assert isinstance(stats["elapsed_seconds"], (int, float))
         assert stats["elapsed_seconds"] >= 0
