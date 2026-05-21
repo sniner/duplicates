@@ -2,6 +2,12 @@
 
 Scan for identical files (duplicates) in subdirectories.
 
+> **Looking for a CLI tool?** If you just want to find duplicate files from
+> the command line, take a look at [fifi](https://github.com/sniner/fifi)
+> — it does the same job, is written in Rust, and is significantly faster.
+> If you want to use this as a Python library (or are happy with a Python
+> CLI), you're in the right place.
+
 ## Requirements
 
 * Python >= 3.11
